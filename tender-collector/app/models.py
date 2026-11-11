@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class CollectRequest(BaseModel):
     list_url: str = Field(
-        ..., min_length=1, description="公告列表页地址（服务会自动跟随分页链接）"
+        ..., min_length=1, description="公告列表页地址（作为列表入口；服务会自动跟随分页链接）"
     )
 
 
@@ -19,9 +19,16 @@ class ProjectOut(BaseModel):
 
 class CollectResponse(BaseModel):
     status: str
+    entry_url: str
     source_url: str
     collected: int
     projects: list[ProjectOut]
+
+
+class EntryOut(BaseModel):
+    entry_url: str
+    items_collected: int
+    updated_at: str
 
 
 class RunOut(BaseModel):

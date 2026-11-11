@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
-"""生成一个本地分页 HTML 示例公告站（市政工程招投标公告）。
+"""生成两个本地分页 HTML 示例公告站版本（市政工程招投标公告）。
 
-生成结果写入 demo_site/，纯静态文件，可用任意 HTTP 服务器托管：
-    python3 -m http.server 8001 --directory demo_site
+生成结果：
+    demo_site/      版本 v1：5 个项目、10 条公告，含一次延期更正
+    demo_site_v2/   版本 v2：同一公告目录撤下延期更正后的快照（9 条公告）
+    demo_site/alt/  另一个列表入口（独立项目，用于演示入口之间互不影响）
+
+两个版本都可用任意 HTTP 服务器托管；配合 scripts/demo_server.py 可以在
+“同一个列表 URL”下切换 v1/v2，从而演示重复采集同一入口后快照被整体替换：
+    python3 scripts/generate_demo_site.py
+    python3 scripts/demo_server.py --port 8001
+    # 浏览器或 curl 访问 http://127.0.0.1:8001/list_1.html
 
 数据特意构造为：
 - 列表页按发布时间倒序排列（更正公告排在其引用的原公告之前），
   服务端不能依赖页面顺序来判断截止时间；
 - 每个项目的“生效截止时间”由发布时间最新的那份公告（原公告或更正公告）决定；
-- 含已过期与未过期两种项目。
+- 含已过期与未过期两种项目；
+- v2 撤下 SZ-2026-001-G1 后，项目 A 的截止时间回退到原公告，不再显示延期值。
 """
 from __future__ import annotations
 
 import html
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 PAGE_SIZE = 4
-OUT_DIR = Path(__file__).resolve().parent.parent / "demo_site"
+ROOT = Path(__file__).resolve().parent.parent
+V1_DIR = ROOT / "demo_site"
+V2_DIR = ROOT / "demo_site_v2"
 
 
 @dataclass
@@ -38,7 +48,7 @@ class Announcement:
 
 
 # ---------------------------------------------------------------------------
-# 示例数据：5 个项目，其中 3 个含更正公告，共 10 条公告
+# 版本 v1：5 个项目，其中 3 个含更正公告，共 10 条公告
 # ---------------------------------------------------------------------------
 ANNOUNCEMENTS: list[Announcement] = [
     # 项目 A：原公告已过期，更正延期后仍在有效期内
@@ -138,6 +148,24 @@ ANNOUNCEMENTS: list[Announcement] = [
     ),
 ]
 
+# 站点撤下项目 A 的延期更正公告后，同一入口的第二个版本。
+WITHDRAWN_CODES = {"SZ-2026-001-G1"}
+ANNOUNCEMENTS_V2: list[Announcement] = [
+    a for a in ANNOUNCEMENTS if a.code not in WITHDRAWN_CODES
+]
+
+# 另一个列表入口（demo_site/alt/），用于演示入口之间快照互不影响。
+ALT_ANNOUNCEMENTS: list[Announcement] = [
+    Announcement(
+        code="SZ-2026-101",
+        title="跨区供水管线迁改工程施工招标公告",
+        kind="original",
+        project_name="跨区供水管线迁改工程",
+        published_at="2026-10-30 10:00",
+        deadline="2026-12-05 16:00",
+    ),
+]
+
 
 def _detail_page(a: Announcement) -> str:
     rows = [
@@ -219,28 +247,52 @@ def _list_page(items: list[Announcement], page: int, total_pages: int) -> str:
 """
 
 
-def main() -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def _write_site(out_dir: Path, announcements: list[Announcement]) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
     # 列表按发布时间倒序 —— 更正公告天然排在原公告前面，制造页面顺序干扰
-    ordered = sorted(ANNOUNCEMENTS, key=lambda a: a.published_at, reverse=True)
-    total_pages = (len(ordered) + PAGE_SIZE - 1) // PAGE_SIZE
+    ordered = sorted(announcements, key=lambda a: a.published_at, reverse=True)
+    total_pages = max(1, (len(ordered) + PAGE_SIZE - 1) // PAGE_SIZE)
 
     for a in ordered:
-        (OUT_DIR / a.filename).write_text(_detail_page(a), encoding="utf-8")
+        (out_dir / a.filename).write_text(_detail_page(a), encoding="utf-8")
 
     for page in range(1, total_pages + 1):
         chunk = ordered[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
-        (OUT_DIR / f"list_{page}.html").write_text(
+        (out_dir / f"list_{page}.html").write_text(
             _list_page(chunk, page, total_pages), encoding="utf-8"
         )
 
-    (OUT_DIR / "index.html").write_text(
+    (out_dir / "index.html").write_text(
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         '<meta http-equiv="refresh" content="0; url=list_1.html">'
         "<title>公告站</title></head><body>跳转中…</body></html>\n",
         encoding="utf-8",
     )
-    print(f"generated {len(ordered)} detail pages, {total_pages} list pages in {OUT_DIR}")
+
+    # 同一站点里的另一个列表入口（不会被主列表页链接到）
+    alt_dir = out_dir / "alt"
+    alt_dir.mkdir(parents=True, exist_ok=True)
+    for a in ALT_ANNOUNCEMENTS:
+        (alt_dir / a.filename).write_text(_detail_page(a), encoding="utf-8")
+    (alt_dir / "list_1.html").write_text(
+        _list_page(ALT_ANNOUNCEMENTS, 1, 1), encoding="utf-8"
+    )
+    (alt_dir / "index.html").write_text(
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<meta http-equiv="refresh" content="0; url=list_1.html">'
+        "<title>其他公告入口</title></head><body>跳转中…</body></html>\n",
+        encoding="utf-8",
+    )
+
+
+def main() -> None:
+    _write_site(V1_DIR, ANNOUNCEMENTS)
+    _write_site(V2_DIR, ANNOUNCEMENTS_V2)
+    print(
+        f"generated v1 {len(ANNOUNCEMENTS)} announcements in {V1_DIR}, "
+        f"v2 {len(ANNOUNCEMENTS_V2)} announcements in {V2_DIR} "
+        f"(withdrawn: {', '.join(sorted(WITHDRAWN_CODES))})"
+    )
 
 
 if __name__ == "__main__":

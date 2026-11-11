@@ -11,14 +11,29 @@ services:
       - tender-data:/data
     restart: unless-stopped
 
-  # 本地分页 HTML 示例公告站（纯静态文件，nginx 托管）
+  # 本地分页 HTML 示例公告站：同一个列表 URL 可切换 v1/v2，并可注入读取故障。
   demo-site:
-    image: nginx:1.27-alpine
+    image: python:3.11-slim
     container_name: tender-demo-site
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python
+      - /demo/scripts/demo_server.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "80"
+      - --v1
+      - /demo/demo_site
+      - --v2
+      - /demo/demo_site_v2
     ports:
       - "8001:80"
     volumes:
-      - ./demo_site:/usr/share/nginx/html:ro
+      - ./scripts/demo_server.py:/demo/scripts/demo_server.py:ro
+      - ./demo_site:/demo/demo_site:ro
+      - ./demo_site_v2:/demo/demo_site_v2:ro
     restart: unless-stopped
 
 volumes:
